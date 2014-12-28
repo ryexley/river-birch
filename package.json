@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/ryexley/river-birch",
   "dependencies": {
+    "async": "0.9.0",
     "custom-logger": "0.3.0",
     "exif": "0.4.0",
     "lodash": "2.4.1",
