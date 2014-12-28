@@ -2,7 +2,7 @@
   "name": "river-birch",
   "version": "0.0.1",
   "description": "Simple script for batch processing a collection (folder) of photos",
-  "main": "index.js",
+  "main": "process-photos.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -15,5 +15,12 @@
   "bugs": {
     "url": "https://github.com/ryexley/river-birch/issues"
   },
-  "homepage": "https://github.com/ryexley/river-birch"
+  "homepage": "https://github.com/ryexley/river-birch",
+  "dependencies": {
+    "custom-logger": "0.3.0",
+    "exif": "0.4.0",
+    "lodash": "2.4.1",
+    "multiline": "1.0.1",
+    "node-getopt": "0.2.3"
+  }
 }
