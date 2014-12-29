@@ -2,6 +2,7 @@ var pkg = require("./package.json");
 
 /* node modules */
 var fs = require("fs");
+var util = require("util");
 
 /* imported modules */
 var _ = require("lodash");
@@ -9,13 +10,24 @@ var async = require("async");
 var Exif = require("exif").ExifImage;
 var GetOptions = require("node-getopt");
 var log = require("custom-logger");
+var moment = require("moment");
 var multiline = require("multiline");
+var readdirp = require("readdirp");
+
+/* local variables */
+var jobState = {
+    files: [],
+    warnings: [],
+    errors: []
+};
 
 _.templateSettings.interpolate = /{([\s\S]+?)}/g;
 
 /* Command line argument processing */
 
-var cliOptions = GetOptions.create([
+// TODO: can I wrap all of this in a single function for processing CLI args??
+
+var cli = GetOptions.create([
         ["s", "source=ARG", "Source folder (contains the photos to be processed)"],
         ["d", "destination=ARG", "Destination folder (where processed photos should be put)"],
         ["h", "help", "Get help on how to use this utility"]
@@ -30,12 +42,12 @@ var help = multiline.stripIndent(function () {/*
 
 */}).replace("{version}", pkg.version);
 
-cliOptions.setHelp(help);
+cli.setHelp(help);
 
-var args = cliOptions.parseSystem();
+var args = cli.parseSystem();
 
 if (args.options.help) {
-    cliOptions.showHelp();
+    cli.showHelp();
 }
 
 // Exit of a source directory is not specified
@@ -118,5 +130,61 @@ function main (options) {
 };
 
 function processPhotos (options) {
-    log.debug("Walking source tree and processing photos...");
+    /* Good reference: https://github.com/montanaflynn/photo-saver/blob/master/index.js */
+
+    readdirp({
+        root: options.source,
+        fileFilter: ["*.jpg", "*.JPG"]
+    })
+    .on("data", handlePhoto)
+    .on("warn", handleWarning)
+    .on("error", handleError)
+    .on("end", processingComplete);
+};
+
+function parseExifDate (exifDate) {
+    var dateArray = exifDate.replace(" ", ":").split(/\s*:\s*/),
+        month = (dateArray[1] - 1).toString();
+
+    dateArray[1] = month;
+
+    return moment(dateArray);
+};
+
+function handlePhoto (file) {
+    var formatString = "YYYYMMDDHHmmss";
+
+    try {
+        new Exif({ image: file.fullPath }, function (err, data) {
+            if (err) {
+                jobState.errors.push(err);
+            } else {
+                var exif = data.exif,
+                image = data.image,
+                date = image.ModifyDate || exif.DateTimeOriginal || exif.CreateDate,
+                timestamp = parseExifDate(date);
+
+                jobState.files.push({
+                    source: file.fullPath,
+                    destination: timestamp.format(formatString)
+                });
+
+                log.debug("Files: ", jobState.files.length, JSON.stringify(jobState.files, null, 2));
+            }
+        });
+    } catch (err) {
+        jobState.errors.push(err);
+    }
+};
+
+function handleWarning (data) {
+    log.warn(data);
+};
+
+function handleError (data) {
+    log.error(data);
+};
+
+function processingComplete (data) {
+    log.debug("Processing complete", JSON.stringify(jobState, null, 4));
 };
