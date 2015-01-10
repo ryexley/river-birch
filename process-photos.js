@@ -1,7 +1,9 @@
 var pkg = require("./package.json");
 
 /* node modules */
+var debug = require("debug");
 var fs = require("fs");
+var path = require("path");
 var util = require("util");
 
 /* imported modules */
@@ -15,6 +17,7 @@ var multiline = require("multiline");
 var readdirp = require("readdirp");
 
 /* local variables */
+var formatString = "YYYYMMDDHHmmss";
 var jobState = {
     files: [],
     warnings: [],
@@ -69,7 +72,7 @@ if ((args.options.source && args.options.source.length > 0) && (args.options.des
         destination: resolvePath(args.options.destination)
     };
 
-    log.info(_.template("Processing photos in {source} and moving them to {destination}", options));
+    log.info(_.template("Processing photos in {source} and copying them to {destination}", options));
 
     main(options);
 }
@@ -124,22 +127,22 @@ function main (options) {
         }
     ], function (err, results) {
         if (_.all(results)) { // if all of the above functions completed successfully...
-            processPhotos(options);
+            processFiles(options);
         }
     });
 };
 
-function processPhotos (options) {
+function processFiles (options) {
     /* Good reference: https://github.com/montanaflynn/photo-saver/blob/master/index.js */
 
     readdirp({
         root: options.source,
-        fileFilter: ["*.jpg", "*.JPG"]
+        fileFilter: ["*.jpg", "*.JPG", "*.mov", "*.MOV"]
     })
-    .on("data", handlePhoto)
-    .on("warn", handleWarning)
-    .on("error", handleError)
-    .on("end", processingComplete);
+    .on("data", onReaddirData)
+    .on("warn", onReaddirWarning)
+    .on("error", onReaddirError)
+    .on("end", onReaddirComplete);
 };
 
 function parseExifDate (exifDate) {
@@ -151,25 +154,75 @@ function parseExifDate (exifDate) {
     return moment(dateArray);
 };
 
-function handlePhoto (file) {
-    var formatString = "YYYYMMDDHHmmss";
+function onReaddirData (file) {
+    jobState.files.push({
+        name: file.name,
+        path: file.fullPath
+    });
+};
 
+function onReaddirWarning (data) {
+    log.warn(data);
+};
+
+function onReaddirError (data) {
+    log.error(data);
+};
+
+function onReaddirComplete (data) {
+    if (jobState.errors.length) {
+        log.error("Errors reading file data, aborting:");
+        _.each(jobState.errors, function (error) {
+            log.error("\t" + error);
+        });
+
+        process.exit();
+    } else {
+        if (jobState.warnings.length) {
+            log.warn("Warnings:");
+            _.each(jobState.warnings, function (warning) {
+                log.warn("\t" + warning);
+            });
+        }
+
+        copyFiles();
+    }
+};
+
+function copyFiles () {
+    _.each(jobState.files, function (file) {
+        copyFile(file, onCopyComplete);
+    });
+};
+
+function copyFile (fileData, next) {
     try {
-        new Exif({ image: file.fullPath }, function (err, data) {
+        new Exif({ image: fileData.path }, function (err, data) {
             if (err) {
                 jobState.errors.push(err);
             } else {
                 var exif = data.exif,
-                image = data.image,
-                date = image.ModifyDate || exif.DateTimeOriginal || exif.CreateDate,
-                timestamp = parseExifDate(date);
+                    image = data.image,
+                    date = image.ModifyDate || exif.DateTimeOriginal || exif.CreateDate,
+                    timestamp = parseExifDate(date),
+                    newFileName = (timestamp.format(formatString) + path.extname(fileData.name)).toLowerCase(),
+                    newFilePath = path.join(options.destination, newFileName);
 
-                jobState.files.push({
-                    source: file.fullPath,
-                    destination: timestamp.format(formatString)
-                });
+                var copied = false;
+                var sourceFile = fs.createReadStream(fileData.path);
+                var targetFile = fs.createWriteStream(newFilePath);
 
-                log.debug("Files: ", jobState.files.length, JSON.stringify(jobState.files, null, 2));
+                sourceFile.on("error", function (err) { done(err); });
+                targetFile.on("error", function (err) { done(err); });
+                targetFile.on("close", function () { done(); });
+                sourceFile.pipe(targetFile);
+
+                var done = function (err) {
+                    if (!copied) {
+                        next(err, _.extend(fileData, { newFile: newFilePath }));
+                        copied = true;
+                    }
+                };
             }
         });
     } catch (err) {
@@ -177,14 +230,10 @@ function handlePhoto (file) {
     }
 };
 
-function handleWarning (data) {
-    log.warn(data);
-};
-
-function handleError (data) {
-    log.error(data);
-};
-
-function processingComplete (data) {
-    log.debug("Processing complete", JSON.stringify(jobState, null, 4));
+function onCopyComplete (err, data) {
+    if (!err) {
+        log.debug("File", data.path, "successfully copied to", data.newFile);
+    } else {
+        log.error("Error copying file:", err);
+    }
 };
