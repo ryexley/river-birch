@@ -23,61 +23,60 @@ var jobState = {
     warnings: [],
     errors: []
 };
+var options = {};
 
 _.templateSettings.interpolate = /{([\s\S]+?)}/g;
 
-/* Command line argument processing */
+init();
 
-// TODO: can I wrap all of this in a single function for processing CLI args??
-
-var cli = GetOptions.create([
+function init () {
+    var cli = GetOptions.create([
         ["s", "source=ARG", "Source folder (contains the photos to be processed)"],
         ["d", "destination=ARG", "Destination folder (where processed photos should be put)"],
         ["h", "help", "Get help on how to use this utility"]
-    ]);
+        ]);
 
-var help = multiline.stripIndent(function () {/*
-    River Birch v{version}
+    var help = multiline.stripIndent(function () {/*
+            River Birch v{version}
 
-    Usage: node process-photos --source /path/to/photos/to/process --destination /path/to/put/processed/photos
+            Usage: node process-photos --source /path/to/photos/to/process --destination /path/to/put/processed/photos
 
-    [[OPTIONS]]
+            [[OPTIONS]]
 
-*/}).replace("{version}", pkg.version);
+        */}).replace("{version}", pkg.version);
 
-cli.setHelp(help);
+    cli.setHelp(help);
 
-var args = cli.parseSystem();
+    var args = cli.parseSystem();
 
-if (args.options.help) {
-    cli.showHelp();
-}
+    if (args.options.help) {
+        cli.showHelp();
+    }
 
-// Exit of a source directory is not specified
-if (!args.options.source || (args.options.source && args.options.source.length < 1)) {
-    log.warn("A source directory must be specified");
-    process.exit();
-}
+    // Exit of a source directory is not specified
+    if (!args.options.source || (args.options.source && args.options.source.length < 1)) {
+        log.warn("A source directory must be specified");
+        process.exit();
+    }
 
-// Exit of a destination directory is not specified
-if (!args.options.destination || (args.options.destination && args.options.destination.length < 1)) {
-    log.warn("A destination directory must be specified");
-    process.exit();
-}
+    // Exit of a destination directory is not specified
+    if (!args.options.destination || (args.options.destination && args.options.destination.length < 1)) {
+        log.warn("A destination directory must be specified");
+        process.exit();
+    }
 
-// if we have both a source and a destination, we can proceed
-if ((args.options.source && args.options.source.length > 0) && (args.options.destination && args.options.destination.length > 0)) {
-    var options = {
-        source: resolvePath(args.options.source),
-        destination: resolvePath(args.options.destination)
-    };
+    // if we have both a source and a destination, we can proceed
+    if ((args.options.source && args.options.source.length > 0) && (args.options.destination && args.options.destination.length > 0)) {
+        options = {
+            source: resolvePath(args.options.source),
+            destination: resolvePath(args.options.destination)
+        };
 
-    log.info(_.template("Processing photos in {source} and copying them to {destination}", options));
+        log.info(_.template("Processing photos in {source} and copying them to {destination}", options));
 
-    main(options);
-}
-
-/* END Command line argument processing */
+        main();
+    }
+};
 
 function resolvePath (path) {
     if (path.indexOf("~") > -1) {
@@ -87,7 +86,7 @@ function resolvePath (path) {
     return path;
 };
 
-function main (options) {
+function main () {
     async.series([
         function (next) {
             fs.exists(options.source, function (exists) {
@@ -127,12 +126,12 @@ function main (options) {
         }
     ], function (err, results) {
         if (_.all(results)) { // if all of the above functions completed successfully...
-            processFiles(options);
+            processFiles();
         }
     });
 };
 
-function processFiles (options) {
+function processFiles () {
     /* Good reference: https://github.com/montanaflynn/photo-saver/blob/master/index.js */
 
     readdirp({
@@ -171,7 +170,7 @@ function onReaddirError (data) {
 
 function onReaddirComplete (data) {
     if (jobState.errors.length) {
-        log.error("Errors reading file data, aborting:");
+        log.error("Errors reading file data:");
         _.each(jobState.errors, function (error) {
             log.error("\t" + error);
         });
@@ -190,49 +189,47 @@ function onReaddirComplete (data) {
 };
 
 function copyFiles () {
+    // TODO: consider refactoring this to use async.parallel instead
     _.each(jobState.files, function (file) {
         copyFile(file, onCopyComplete);
     });
 };
 
 function copyFile (fileData, next) {
-    try {
-        new Exif({ image: fileData.path }, function (err, data) {
-            if (err) {
-                jobState.errors.push(err);
-            } else {
-                var exif = data.exif,
-                    image = data.image,
-                    date = image.ModifyDate || exif.DateTimeOriginal || exif.CreateDate,
-                    timestamp = parseExifDate(date),
-                    newFileName = (timestamp.format(formatString) + path.extname(fileData.name)).toLowerCase(),
-                    newFilePath = path.join(options.destination, newFileName);
+    new Exif({ image: fileData.path }, function (err, data) {
+        if (err) {
+            log.error("Is there some kinda error here?", err.message, fileData);
+            jobState.errors.push(err);
+        } else {
+            var exif = data.exif,
+                image = data.image,
+                date = image.ModifyDate || exif.DateTimeOriginal || exif.CreateDate,
+                timestamp = parseExifDate(date),
+                newFileName = (timestamp.format(formatString) + path.extname(fileData.name)).toLowerCase(),
+                newFilePath = path.join(options.destination, newFileName);
 
-                var copied = false;
-                var sourceFile = fs.createReadStream(fileData.path);
-                var targetFile = fs.createWriteStream(newFilePath);
+            var copied = false;
+            var sourceFile = fs.createReadStream(fileData.path);
+            var targetFile = fs.createWriteStream(newFilePath);
 
-                sourceFile.on("error", function (err) { done(err); });
-                targetFile.on("error", function (err) { done(err); });
-                targetFile.on("close", function () { done(); });
-                sourceFile.pipe(targetFile);
+            sourceFile.on("error", function (err) { done(err); });
+            targetFile.on("error", function (err) { done(err); });
+            targetFile.on("close", function () { done(); });
+            sourceFile.pipe(targetFile);
 
-                var done = function (err) {
-                    if (!copied) {
-                        next(err, _.extend(fileData, { newFile: newFilePath }));
-                        copied = true;
-                    }
-                };
-            }
-        });
-    } catch (err) {
-        jobState.errors.push(err);
-    }
+            var done = function (err) {
+                if (!copied) {
+                    next(err, _.extend(fileData, { newFile: newFilePath }));
+                    copied = true;
+                }
+            };
+        }
+    });
 };
 
 function onCopyComplete (err, data) {
     if (!err) {
-        log.debug("File", data.path, "successfully copied to", data.newFile);
+        log.info("File", data.path, "successfully copied to", data.newFile);
     } else {
         log.error("Error copying file:", err);
     }
